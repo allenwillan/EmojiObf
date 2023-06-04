@@ -1,0 +1,303 @@
+#!/usr/bin/python3
+
+'''
+# This script requires the following extras:
+pip3 install emoji
+'''
+
+import struct
+import random
+import argparse
+import os.path
+import base64
+import string
+import json
+
+import emoji
+
+#Hardcoded list of emoji to avoid
+black_list = []
+
+#Function to convert an int into it's unicode emoji
+def int_to_emoji(eint):
+    return struct.pack('<I', eint).decode('utf-32le')
+
+#There is no handy base64 library for base64 symbols, so make it ourself
+base64alphabet = (string.ascii_uppercase + string.ascii_lowercase + string.digits + '+/=').encode()
+#Function to get the list of characters that are going to need to be in the dictionaries
+def get_alphabet(enctype):
+    if enctype == 'hex':
+        return range(0x00, 0xff+1)
+    elif enctype == 'base16':
+        return b'0123456789ABCDEF='
+    elif enctype == 'base32':
+        return base64._b32alphabet + b'='
+    elif enctype == 'base64':
+        return base64alphabet
+    elif enctype == 'base85':
+        return base64._b85alphabet + b'='
+
+#Makes a dictionary for replacing values
+def make_raw_dictionary(emoji_base=0x1F600, add=1, enctype='hex'):
+    forward_dict = {}
+    back_dict = {}
+    #Fetch the list of characters for our encoding
+    alpha = get_alphabet(enctype)
+    #Start our search from the provided base emoji code
+    cur_emj = emoji_base
+    #We need a value for every char in our alphabet
+    for i in alpha:
+        #Check that our arbitary int is an actual emoji AND not in our blacklist
+        while not (emoji.is_emoji(int_to_emoji(cur_emj))) or (int_to_emoji(cur_emj) in black_list):
+            #If it's bad, skip to the next candidate
+            cur_emj += add
+        #Add the emoji value to the int key for forward
+        forward_dict[i] = int_to_emoji(cur_emj)
+        #Add the emoji key for the in value for backward
+        back_dict[int_to_emoji(cur_emj)] = i
+        #Loop++
+        cur_emj += add
+        
+    return forward_dict, back_dict
+
+#Makes a dictionary for replacing values with a seed value    
+def make_seeded_dictionary(emoji_base=0x1F600, add=1, seed=None, enctype='hex'):
+    #In case something other than main calls us
+    if not seed:
+        seed = 'DefaultSeed'
+    #Use the seed value to seed the random function
+    random.seed(seed)
+    emj_list = []
+    #Fetch the list of characters for our encoding
+    alpha = get_alphabet(enctype)
+    #Start our search from the provided base emoji code
+    cur_emj = emoji_base
+    #We need a value for every char in our alphabet
+    for i in alpha:
+        #Check that our arbitary int is an actual emoji AND not in our blacklist
+        while not (emoji.is_emoji(int_to_emoji(cur_emj))) or (int_to_emoji(cur_emj) in black_list):
+            #If it's bad, skip to the next candidate
+            cur_emj += add
+        #Add the value to a temp list
+        emj_list.append(cur_emj)
+        #Loop++
+        cur_emj += add
+    #Have random shuffle our list of emoji in place based upon the seed
+    random.shuffle(emj_list)
+    
+    forward_dict = {}
+    back_dict = {}
+    #Iterate through each char in our alphabet
+    for i in alpha:
+        #Pop a value out of our shuffled list
+        thisemj = emj_list.pop()
+        #Add the emoji value to the int key for forward
+        forward_dict[i] = int_to_emoji(thisemj)
+        #Add the emoji key for the in value for backward
+        back_dict[int_to_emoji(thisemj)] = i
+    
+    return forward_dict, back_dict
+    
+#Look up the provided characters in the forward dictionary
+def encode(indata, lookupdict):
+    ret_list = []
+    for b in indata:
+        ret_list.append(lookupdict[b])
+        
+    return ret_list
+
+#Look up the provided emoji in the backward dictionary
+def decode(inlist, lookupdict):
+    ret_data = b''
+    for i in inlist:
+        #Skip extra emoji that aren't in our table
+        if not i in lookupdict:
+            continue
+        ret_data += lookupdict[i].to_bytes()
+    
+    return ret_data
+
+#BaseNN decode the provided data
+def make_unbase(data, basestr):
+    #Try to blindly add '=' until it decodes, in case padding were omitted
+    for i in [b'', b'=', b'==', b'===']:
+        try:
+            if basestr == 'base16':
+                return base64.b16decode(data+i)
+            elif basestr == 'base32':
+                return base64.b32decode(data+i)
+            elif basestr == 'base64':
+                return base64.b64decode(data+i)
+            elif basestr == 'base85':
+                return base64.b85decode(data+i)
+        except:
+            continue
+    
+#BaseNN encode the provdided data
+def make_base(data, basestr):
+    #Remove the padding, since we blindly try adding at the end anyway
+    if basestr == 'base16':
+        return base64.b16encode(data).strip(b'=')
+    elif basestr == 'base32':
+        return base64.b32encode(data).strip(b'=')
+    elif basestr == 'base64':
+        return base64.b64encode(data).strip(b'=')
+    elif basestr == 'base85':
+        return base64.b85encode(data).strip(b'=')
+   
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('-e', '--encode', action='store',
+                        help='Encode mode. Takes either a string or a filepath')
+    parser.add_argument('-d', '--decode', action='store',
+                        help='Decode mode. Takes either a string or a filepath')
+    parser.add_argument('-b', '--base', action='store', default='0x1f600',
+                        help='Base unicode number to start looking for emoji at. Smilies are around 1F600, but most code range from 1F300 through 1FAF8')
+    parser.add_argument('-s', '--seed', action='store', default='',
+                        help='Use a seed value to shuffle the order the emoji are chosen in. This shuffles the chosen emoji, not the entire emoji database')
+    parser.add_argument('-t', '--type', action='store', choices=['hex', 'base16', 'base32', 'base64', 'base85'], default='hex',
+                        help='Use a specifc type of encoding. Default is hex (0x00-0xFF).')
+    parser.add_argument('--alias', action='store_true',
+                        help='Encode or decode using aliases (which are emoji names with colons)')
+    parser.add_argument('-o', '--out', action='store',
+                        help='Output to a file in utf-32le')
+    
+    parser.add_argument('--mydict', action='store',
+                        help='Rather than generate a dictionary, provide one as a json file')
+    parser.add_argument('--printdict', action='store_true',
+                        help='Print the generatae dictionary to screen')
+    parser.add_argument('--storedict', action='store',
+                        help='Store the generated dictionary as a json file')
+    parser.add_argument('--quiet', action='store_true',
+                        help='Only print the generated output to screen')
+    
+    args = parser.parse_args()
+    
+    #Convert offset from string
+    baseoffset = int(args.base, 16)
+    
+    #Check to see if we're pulling in a dictionary
+    if args.mydict:
+        if not args.quiet:
+            print('[+] Loading dictionary from {}'.format(args.mydict))
+        with open(args.mydict, 'r') as f:
+            indict = json.loads(f.read())
+            fdict = {}
+            bdict = {}
+            #Fix the strings into ints
+            for k in indict:
+                v = indict[k]
+                fdict[int(k)] = v
+                bdict[v] = int(k)
+    #Check if we're building a database from a seed
+    elif args.seed:
+        if not args.quiet:
+            print('[+] Generating dictionary from emoji base {:x} with seed: {}'.format(baseoffset, args.seed))
+        fdict, bdict = make_seeded_dictionary(emoji_base=baseoffset, seed=args.seed, enctype=args.type)
+    #Just build a regular database
+    else:
+        if not args.quiet:
+            print('[+] Generating dictionary from emoji base {:x}'.format(baseoffset))
+        fdict, bdict = make_raw_dictionary(emoji_base=baseoffset, enctype=args.type)
+
+    #Save off the dictionary if asked
+    if args.storedict:
+        if not args.quiet:
+            print('[+] Saving dictionary to {}'.format(args.storedict))
+        with open(args.storedict, 'w') as f:
+            f.write(json.dumps(fdict))
+
+    #Print the dictionary to screen if asked
+    if args.printdict:
+        if args.encode:            
+            print('[+] Forward data dictionary: {}'.format(fdict))    
+        else:
+            print('[+] Backward data dictionary: {}'.format(bdict))
+    
+    #Encode!
+    if args.encode:
+        #Check if the input is a file or text
+        if os.path.exists(args.encode):
+            if not args.quiet:
+                print('[+] Reading from file: {}'.format(args.encode))
+            with open(args.encode, 'rb') as f:
+                datatoencode = f.read()
+        else:
+            if not args.quiet:
+                print('[+] Using text from cli: "{}"'.format(args.encode))
+            datatoencode = (args.encode).encode()
+        
+        #Check if we're doing baseNN encoding
+        if args.type.startswith('base'):
+            if not args.quiet:
+                print('[+] Encoding with {}'.format(args.type))
+            #Go base it up
+            datatoencode = make_base(datatoencode, args.type)
+            if not args.quiet:
+                print('[+]    {}'.format(datatoencode))
+        #Encode in emojis
+        out = encode(datatoencode, fdict)
+        
+        #Check if we are supposed to convert to aliases
+        if args.alias:
+            if not args.quiet:
+                print('[+] Converting {} to aliases'.format(''.join(out)))
+            out = emoji.demojize(out)
+            
+        #Output encoded data to screen
+        if not args.quiet:
+            print('[+] Encoded data: {}'.format(''.join(out)))
+        else:
+            print(''.join(out))
+            
+        #Check if we are outputing to file as well
+        if args.out:
+            with open(args.out, 'w') as f:
+                f.write(''.join(out))
+    
+    #Decode!
+    elif args.decode:
+        #Check if the input is a file or text
+        if os.path.exists(args.decode):
+            if not args.quiet:
+                print('[+] Reading from file: {}'.format(args.decode))
+            with open(args.decode, 'rb') as f:
+                datatodecode = f.read()
+        else:
+            if not args.quiet:
+                print('[+] Using text from cli: "{}"'.format(args.decode))
+            datatodecode = (args.decode)
+        
+        #Check if we are supposed to convert from aliases
+        if args.alias:
+            if not args.quiet:
+                print('[+] Converting {} from aliases'.format(''.join(datatodecode)))
+            datatodecode = emoji.emojize(datatodecode)
+        
+        #Get a list of only the emoji
+        datatodecode = [x['emoji'] for x in emoji.emoji_list(datatodecode)]
+        
+        #Decode
+        out = decode(datatodecode, bdict)
+        
+        #Check if we're doing baseNN encoding
+        if args.type.startswith('base'):
+            if not args.quiet:
+                print('[+] Decoding with {}'.format(args.type))
+            out = make_unbase(out, args.type)
+        
+        #Output to screen
+        if not args.quiet:
+            print('[+] Decoded data: {}'.format(out))
+        else:
+            print(out)
+        
+        #Check if we are outputing to file as well
+        if args.out:
+            with open(args.out, 'wb') as f:
+                f.write(out)
+    else:
+        parser.print_help()
+
+if __name__ == '__main__':
+    main()
