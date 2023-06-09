@@ -12,6 +12,8 @@ import os.path
 import base64
 import string
 import json
+import binascii
+import math
 
 import emoji
 
@@ -22,6 +24,156 @@ black_list = []
 def int_to_emoji(eint):
     return struct.pack('<I', eint).decode('utf-32le')
 
+#Function to determine the minimum number of bits necessary to represent the given alphabet
+def make_custom_alphabet(custom_alphabet=string.ascii_lowercase):
+    #Fix input into a list
+    if not isinstance(custom_alphabet, list):
+        custom_alphabet = list(custom_alphabet)
+    #Get number of characters
+    length = len(custom_alphabet)
+    #Work through powers of 2 to figure out the max requiured size
+    for i in range(1,8):
+        #We need to check for the size of the alphabet+1 for the eom bits
+        if 2**i > length+1:
+            req_bits = i
+            break
+    #Our total space is the power of 2 of the number of bits
+    space = 2**req_bits
+    
+    fbit_dict = {}
+    bbit_dict = {}
+    
+    #Run through the space
+    for i in range(0, space):
+        #Break if we've finished the alphabet
+        if not custom_alphabet:
+            break
+        #Add the character associated with the index to the forward/back
+        c = custom_alphabet.pop()
+        bbit_dict[i] = c
+        fbit_dict[c] = i
+        
+    #Get the eom with all bits set, and add it to forward/back
+    fullbits = 2**req_bits-1
+    fbit_dict['\x00'] = fullbits
+    bbit_dict[fullbits] = '\x00'
+    
+    return req_bits, fbit_dict, bbit_dict
+
+#Function to convert the string to a series of chars of the new width, similar to base64 encoding:
+# emojibits==9, plus 0's for width padding
+#  100001000, 110011111, 110000000
+#  100001000110011111110000000
+# with alphabet width of 5: (cut trailing excess)
+#  10000, 10001, 10011, 11111, 00000
+# parse until a char with all bits set:
+#  10000, 10001, 10011
+# ==abc (or whatever the alphabet is)
+def emojistream_to_string(instring, emojibits=9, custom_alphabet=string.ascii_lowercase):
+    req_bits, fbit_dict, bbit_dict = make_custom_alphabet(custom_alphabet.encode())
+    stringbits = ''
+    for i in instring:
+        #Account for chars and ints
+        try:
+            cstr = format(i, 'b')
+        except:
+            cstr = format(ord(i), 'b')
+        #Right-pad '0' in the bits as string, and append
+        stringbits += (emojibits - len(cstr))*'0' + cstr
+
+    #Check the length of the string against the alphabet width
+    rem = len(stringbits) % req_bits
+    #Trim the trailing width padding
+    stringbits = stringbits[:len(stringbits)-rem]
+    
+    narrow_list = []
+    #Iterate through the bits by stepping by the width
+    for i in range(0, len(stringbits), req_bits):
+        a = stringbits[i:i+req_bits]
+        #Convert the bits back to an int
+        narrow_list.append(int(a, 2))
+
+    outstring = ''
+    for i in narrow_list:
+        #Check to see if we hit the eom
+        if bbit_dict[i] == '\x00':
+            break
+        #Look up the int in the back dict and append to the output
+        outstring += bbit_dict[i].to_bytes().decode()
+    
+    return outstring
+    
+#Function to convert the string to a series of chars of the new width, similar to base64 encoding:
+# abc: with alphabet width of 5
+#  10000, 10001, 10011 (plus all bits for eom padding)
+#  10000100011001111111
+# emojibits==9, plus 0's for width padding
+#  100001000, 110011111, 110000000
+def string_to_emojistream(instring, emojibits=9, custom_alphabet=string.ascii_lowercase):
+    req_bits, fbit_dict, bbit_dict = make_custom_alphabet(custom_alphabet.encode())
+    stringbits = ''
+    for i in instring:
+        #Look up the character in our alphabet, convert to bits
+        cstr = format(fbit_dict[i], 'b')
+        #Left-pad with '0' and append the  bits 
+        stringbits += (req_bits - len(cstr))*'0' + cstr
+        
+    #Add eom bits
+    stringbits += req_bits*'1'
+        
+    #Pad the right of the string to fir the width of the emojibits
+    rem = len(stringbits) % emojibits
+    stringbits += (emojibits - rem)*'0'
+        
+    wide_list = []
+    #Iterate through the bits by stepping by the emoji width
+    for i in range(0, len(stringbits), emojibits):
+        a = stringbits[i:i+emojibits]
+        #Convert the bits back to an int
+        wide_list.append(int(a, 2))
+        
+    return wide_list
+
+#Create a dictionary covering all possible bit combinations of the given width
+def make_custom_dictionary(emoji_base=0x1F600, add=1, seed=None, emojibits=9):
+    #In case something other than main calls us
+    if seed:
+        #Use the seed value to seed the random function
+        random.seed(seed)
+    
+    emj_list = []
+    #Fetch the list of characters for our encoding
+    alpha = list(range(0x0, 2**emojibits))
+    #Start our search from the provided base emoji code
+    cur_emj = emoji_base
+    #We need a value for every char in our alphabet
+    for i in alpha:
+        #Check that our arbitary int is an actual emoji AND not in our blacklist
+        while not (emoji.is_emoji(int_to_emoji(cur_emj))) or (int_to_emoji(cur_emj) in black_list):
+            #If it's bad, skip to the next candidate
+            cur_emj += add
+        #Add the value to a temp list
+        emj_list.append(cur_emj)
+        #Loop++
+        cur_emj += add
+        
+    if seed:
+        #Have random shuffle our list of emoji in place based upon the seed
+        random.shuffle(emj_list)
+    
+    forward_dict = {}
+    back_dict = {}
+    #Iterate through each char in our alphabet
+    for i in alpha:
+        #Pop a value out of our shuffled list
+        thisemj = emj_list.pop()
+        #Add the emoji value to the int key for forward
+        forward_dict[i] = int_to_emoji(thisemj)
+        #Add the emoji key for the in value for backward
+        back_dict[int_to_emoji(thisemj)] = i
+    
+    return forward_dict, back_dict
+    
 #There is no handy base64 library for base64 symbols, so make it ourself
 base64alphabet = (string.ascii_uppercase + string.ascii_lowercase + string.digits + '+/=').encode()
 #Function to get the list of characters that are going to need to be in the dictionaries
@@ -108,13 +260,20 @@ def encode(indata, lookupdict):
 
 #Look up the provided emoji in the backward dictionary
 def decode(inlist, lookupdict):
-    ret_data = b''
+    ret_data = []
+    nobytes = True
     for i in inlist:
         #Skip extra emoji that aren't in our table
         if not i in lookupdict:
             continue
-        ret_data += lookupdict[i].to_bytes()
+        try:
+            ret_data.append(lookupdict[i].to_bytes())
+        except:
+            nobytes = False
+            ret_data.append(lookupdict[i])
     
+    if nobytes:
+        ret_data = b''.join(ret_data)
     return ret_data
 
 #BaseNN decode the provided data
@@ -155,7 +314,7 @@ def main():
                         help='Base unicode number to start looking for emoji at. Smilies are around 1F600, but most code range from 1F300 through 1FAF8')
     parser.add_argument('-s', '--seed', action='store', default='',
                         help='Use a seed value to shuffle the order the emoji are chosen in. This shuffles the chosen emoji, not the entire emoji database')
-    parser.add_argument('-t', '--type', action='store', choices=['hex', 'base16', 'base32', 'base64', 'base85'], default='hex',
+    parser.add_argument('-t', '--type', action='store', choices=['custom', 'hex', 'base16', 'base32', 'base64', 'base85'], default='hex',
                         help='Use a specifc type of encoding. Default is hex (0x00-0xFF).')
     parser.add_argument('--alias', action='store_true',
                         help='Encode or decode using aliases (which are emoji names with colons)')
@@ -171,10 +330,46 @@ def main():
     parser.add_argument('--quiet', action='store_true',
                         help='Only print the generated output to screen')
     
+    parser.add_argument('--blacklist', action='store', nargs='+',
+                        help='List of unicode to avoid (Example "\\U0001f6de" or ":wheel:" or "\U0001f6de")')
+    parser.add_argument('--customalpha', action='store',
+                        help='Character string alphabet for "custom" mode. Default is string.ascii_lowercase')
+    parser.add_argument('--customwidth', action='store', type=int, default=9,
+                        help='Emoji bit width for "custom" mode. Default is 9')
+    
     args = parser.parse_args()
+    
+    #Add the user specified blacklist to the global blacklist
+    if args.blacklist:
+        for i in [x.strip('"') for x in args.blacklist]:
+            #If it's a staight emoji, add it
+            if emoji.is_emoji(i):
+                black_list.append(i)
+            #If it's an alias, unpack it and add
+            elif emoji.is_emoji(emoji.emojize(i)):
+                black_list.append(emoji.emojize(i))
+            #Else, try to unpack the \\U syntax
+            else:
+                try:
+                    a = binascii.unhexlify(i.strip('\\U'))
+                    b = a.decode('utf-32be')
+                    if emoji.is_emoji(b):
+                        black_list.append(b)
+                except:
+                    print('Failed to encode "{}"'.format(i))
     
     #Convert offset from string
     baseoffset = int(args.base, 16)
+    
+    #Check if the user specified a custom alphabet to use for the --type custom
+    customalphabet = string.ascii_lowercase
+    if args.customalpha:
+        #Check if they just want to use a defined string set
+        if args.customalpha.startswith('string.'):
+            customalphabet = getattr(string, args.customalpha[7:])
+        #Otherwise, just use what was passsed
+        else:
+            customalphabet = ''.join(args.customalpha)
     
     #Check to see if we're pulling in a dictionary
     if args.mydict:
@@ -189,6 +384,10 @@ def main():
                 v = indict[k]
                 fdict[int(k)] = v
                 bdict[v] = int(k)
+    #Check if we're using a custom dictinoary, and if we are use the bit width to generate a dict of the 
+    #  correct size
+    elif args.type == 'custom':
+        fdict, bdict = make_custom_dictionary(emoji_base=baseoffset, seed=args.seed, emojibits=args.customwidth)
     #Check if we're building a database from a seed
     elif args.seed:
         if not args.quiet:
@@ -235,6 +434,11 @@ def main():
             datatoencode = make_base(datatoencode, args.type)
             if not args.quiet:
                 print('[+]    {}'.format(datatoencode))
+        
+        #If we're using custom, go convert the string into the new widths
+        if args.type == 'custom':
+            datatoencode = string_to_emojistream(datatoencode, emojibits=args.customwidth, custom_alphabet=customalphabet)
+        
         #Encode in emojis
         out = encode(datatoencode, fdict)
         
@@ -276,7 +480,7 @@ def main():
         
         #Get a list of only the emoji
         datatodecode = [x['emoji'] for x in emoji.emoji_list(datatodecode)]
-        
+
         #Decode
         out = decode(datatodecode, bdict)
         
@@ -285,7 +489,11 @@ def main():
             if not args.quiet:
                 print('[+] Decoding with {}'.format(args.type))
             out = make_unbase(out, args.type)
-        
+
+        #If we're using custom, go convert the string back into the original widths
+        if args.type == 'custom':
+            out = emojistream_to_string(out, emojibits=args.customwidth, custom_alphabet=customalphabet)
+            
         #Output to screen
         if not args.quiet:
             print('[+] Decoded data: {}'.format(out))
