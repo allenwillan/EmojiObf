@@ -14,6 +14,7 @@ import string
 import json
 import binascii
 import math
+import sys
 
 import emoji
 
@@ -22,6 +23,8 @@ black_list = []
 
 #Function to convert an int into it's unicode emoji
 def int_to_emoji(eint):
+    if eint > 0x1FFFD:
+        raise Exception('Emoji space has been exhausted and dictionary is incomplete. Use a smaller dictionary space.')
     return struct.pack('<I', eint).decode('utf-32le')
 
 #Function to determine the minimum number of bits necessary to represent the given alphabet
@@ -99,7 +102,7 @@ def emojistream_to_string(instring, emojibits=9, custom_alphabet=string.ascii_lo
         if bbit_dict[i] == '\x00':
             break
         #Look up the int in the back dict and append to the output
-        outstring += bbit_dict[i].to_bytes().decode()
+        outstring += bbit_dict[i].to_bytes(1, 'little').decode()
     
     return outstring
     
@@ -267,7 +270,7 @@ def decode(inlist, lookupdict):
         if not i in lookupdict:
             continue
         try:
-            ret_data.append(lookupdict[i].to_bytes())
+            ret_data.append(lookupdict[i].to_bytes(1,'little'))
         except:
             nobytes = False
             ret_data.append(lookupdict[i])
@@ -387,6 +390,8 @@ def main():
     #Check if we're using a custom dictinoary, and if we are use the bit width to generate a dict of the 
     #  correct size
     elif args.type == 'custom':
+        if not args.quiet:
+            print('[+] Using custom alphabet: "{}"'.format(customalphabet))
         fdict, bdict = make_custom_dictionary(emoji_base=baseoffset, seed=args.seed, emojibits=args.customwidth)
     #Check if we're building a database from a seed
     elif args.seed:
