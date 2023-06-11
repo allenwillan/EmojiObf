@@ -90,8 +90,9 @@ After PasteSend, I was thinking of various ways that encoding is used and how it
 3. Word key system - Presently the communicants need to exchange their settings (similar to any symmetric key system), and this could be cumbersome ("today we're base16 and our seed is 'everest' and our base offset is 1f650"). It would be interesting to develop a system to generate a phrase to communicate the key. This obviously isn't ideal to do via the social media that the emoji are being sent on, but possibly could be used over another medium, like the phone ("How are you doing? I was thinking of having pasta tonight, maybe watch a movie about hiking. Could be fun!").
 
 # Resources
-* https://en.wikipedia.org/wiki/Emoji
-* https://en.wikipedia.org/wiki/Base64
-* https://en.wikipedia.org/wiki/Unicode
-* https://pypi.org/project/emoji/
-* https://www.unicode.org/Public/15.0.0/ucd/emoji/emoji-data.txt
+* Video overview: https://youtu.be/80aY-K4CVeo
+* General information about emoji and links to useful full list of emojis: https://en.wikipedia.org/wiki/Emoji
+* General base64 encoding information used to work on custom encoding: https://en.wikipedia.org/wiki/Base64
+* General unicode information: https://en.wikipedia.org/wiki/Unicode
+* Emoji library documentation: https://pypi.org/project/emoji/
+* Raw Emoji unicode information: https://www.unicode.org/Public/15.0.0/ucd/emoji/emoji-data.txt
