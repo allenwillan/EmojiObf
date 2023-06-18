@@ -15,11 +15,15 @@ import json
 import binascii
 import math
 import sys
+import re
 
 import emoji
 
 #Hardcoded list of emoji to avoid
 black_list = []
+
+# Word list source: https://en.wikipedia.org/wiki/Most_common_words_in_English
+word_list = ['the', 'be', 'to', 'of', 'and', 'a', 'in', 'that', 'have', 'I', 'it', 'for', 'not', 'on', 'with', 'he', 'as', 'you', 'do', 'at', 'this', 'but', 'his', 'by', 'from', 'they', 'we', 'say', 'her', 'she', 'or', 'an', 'will', 'my', 'one', 'all', 'would', 'there', 'their', 'what', 'so', 'up', 'out', 'if', 'about', 'who', 'get', 'which', 'go', 'me', 'when', 'make', 'can', 'like', 'time', 'no', 'just', 'him', 'know', 'take', 'people', 'into', 'year', 'your', 'good', 'some', 'could', 'them', 'see', 'other', 'than', 'then', 'now', 'look', 'only', 'come', 'its', 'over', 'think', 'also', 'back', 'after', 'use', 'two', 'how', 'our', 'work', 'first', 'well', 'way', 'even', 'new', 'want', 'because', 'any', 'these', 'give', 'day', 'most', 'us']
 
 #Function to convert an int into it's unicode emoji
 def int_to_emoji(eint):
@@ -252,17 +256,65 @@ def make_seeded_dictionary(emoji_base=0x1F600, add=1, seed=None, enctype='hex'):
         back_dict[int_to_emoji(thisemj)] = i
     
     return forward_dict, back_dict
+
+#Makes a dictionary, give a wordlist
+def make_wordlist_dictionary(emoji_base=0x1F600, add=1, seed=None, wordlist=None):
+    #In case something other than main calls us
+    if not seed:
+        seed = 'DefaultSeed'
+    #Use the seed value to seed the random function
+    random.seed(seed)
+    emj_list = []
+
+    #Start our search from the provided base emoji code
+    cur_emj = emoji_base
+    
+    alpha = get_alphabet('hex')
+    wordlist.extend(list(alpha))
+    
+    for i in wordlist:
+        #Check that our arbitary int is an actual emoji AND not in our blacklist
+        while not (emoji.is_emoji(int_to_emoji(cur_emj))) or (int_to_emoji(cur_emj) in black_list):
+            #If it's bad, skip to the next candidate
+            cur_emj += add
+        #Add the value to a temp list
+        emj_list.append(cur_emj)
+        #Loop++
+        cur_emj += add
+    #Have random shuffle our list of emoji in place based upon the seed
+    random.shuffle(emj_list)
+    
+    forward_dict = {}
+    back_dict = {}
+    #Iterate through each char in our alphabet
+    for i in wordlist:
+        if isinstance(i, str):
+            i = i.encode()
+        #Pop a value out of our shuffled list
+        thisemj = emj_list.pop()
+        #Add the emoji value to the int key for forward
+        forward_dict[i] = int_to_emoji(thisemj)
+        #Add the emoji key for the in value for backward
+        back_dict[int_to_emoji(thisemj)] = i
+    
+    return forward_dict, back_dict
     
 #Look up the provided characters in the forward dictionary
-def encode(indata, lookupdict):
+def encode(indata, lookupdict, type):
     ret_list = []
+    if type == 'word':
+        indata = re.split(b'\W+', indata)
     for b in indata:
-        ret_list.append(lookupdict[b])
+        if b in lookupdict:
+            ret_list.append(lookupdict[b])
+        else:
+            for sub in b:
+                ret_list.append(lookupdict[sub])
         
     return ret_list
 
 #Look up the provided emoji in the backward dictionary
-def decode(inlist, lookupdict):
+def decode(inlist, lookupdict, type):
     ret_data = []
     nobytes = True
     for i in inlist:
@@ -277,6 +329,8 @@ def decode(inlist, lookupdict):
     
     if nobytes:
         ret_data = b''.join(ret_data)
+    if type == 'word':
+        ret_data = b' '.join(ret_data)
     return ret_data
 
 #BaseNN decode the provided data
@@ -317,7 +371,8 @@ def main():
                         help='Base unicode number to start looking for emoji at. Smilies are around 1F600, but most code range from 1F300 through 1FAF8')
     parser.add_argument('-s', '--seed', action='store', default='',
                         help='Use a seed value to shuffle the order the emoji are chosen in. This shuffles the chosen emoji, not the entire emoji database')
-    parser.add_argument('-t', '--type', action='store', choices=['custom', 'hex', 'base16', 'base32', 'base64', 'base85'], default='hex',
+    parser.add_argument('-t', '--type', action='store', default='hex',
+                        choices=['custom', 'hex', 'base16', 'base32', 'base64', 'base85', 'word'], 
                         help='Use a specifc type of encoding. Default is hex (0x00-0xFF).')
     parser.add_argument('--alias', action='store_true',
                         help='Encode or decode using aliases (which are emoji names with colons)')
@@ -337,6 +392,8 @@ def main():
                         help='List of unicode to avoid (Example "\\U0001f6de" or ":wheel:" or "\U0001f6de")')
     parser.add_argument('--customalpha', action='store',
                         help='Character string alphabet for "custom" mode. Default is string.ascii_lowercase')
+    parser.add_argument('--wordlist', action='store',
+                        help='Full path to file containing newline separated words for "word" mode. Default is the 100 most common words in English from Wikipedia')
     parser.add_argument('--customwidth', action='store', type=int, default=9,
                         help='Emoji bit width for "custom" mode. Default is 9')
     
@@ -373,6 +430,12 @@ def main():
         #Otherwise, just use what was passsed
         else:
             customalphabet = ''.join(args.customalpha)
+            
+    #Check if the user specified a word dictionary or if we're using the default
+    custom_wordlist = word_list
+    if args.wordlist:
+        with open(args.wordlist, 'r') as f:
+            custom_wordlist = [w.strip() for w in f.readlines()]
     
     #Check to see if we're pulling in a dictionary
     if args.mydict:
@@ -387,6 +450,11 @@ def main():
                 v = indict[k]
                 fdict[int(k)] = v
                 bdict[v] = int(k)
+    #Make emoji dictionary based upon words instead of characters
+    elif args.type == 'word':
+        if not args.quiet:
+            print('[+] Using word list: "{}"'.format(custom_wordlist))
+        fdict, bdict = make_wordlist_dictionary(emoji_base=baseoffset, seed=args.seed, wordlist=custom_wordlist)
     #Check if we're using a custom dictinoary, and if we are use the bit width to generate a dict of the 
     #  correct size
     elif args.type == 'custom':
@@ -445,7 +513,7 @@ def main():
             datatoencode = string_to_emojistream(datatoencode, emojibits=args.customwidth, custom_alphabet=customalphabet)
         
         #Encode in emojis
-        out = encode(datatoencode, fdict)
+        out = encode(datatoencode, fdict, args.type)
         
         #Check if we are supposed to convert to aliases
         if args.alias:
@@ -487,7 +555,7 @@ def main():
         datatodecode = [x['emoji'] for x in emoji.emoji_list(datatodecode)]
 
         #Decode
-        out = decode(datatodecode, bdict)
+        out = decode(datatodecode, bdict, args.type)
         
         #Check if we're doing baseNN encoding
         if args.type.startswith('base'):
